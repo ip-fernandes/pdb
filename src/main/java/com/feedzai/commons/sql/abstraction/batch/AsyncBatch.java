@@ -29,9 +29,8 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 /**
@@ -56,6 +55,10 @@ public class AsyncBatch extends DefaultBatch {
      */
     private final Collection<DatabaseEngine> createdInnerDatabaseEngines = Collections.synchronizedSet(new HashSet<>());
 
+    private final ScheduledExecutorService scheduledExecutorService;
+
+    private final AtomicLong totalPending;
+
     public AsyncBatch(final DatabaseEngine de,
                       final Supplier<PostgreSqlEngine> databaseEngineProvider,
                       final String name,
@@ -76,6 +79,16 @@ public class AsyncBatch extends DefaultBatch {
                 new ThreadFactoryBuilder().setNameFormat("asyncBatch-" + name + "-%d").build()
         );
         this.databaseEngine = ThreadLocal.withInitial(databaseEngineProvider);
+
+        this.totalPending = new AtomicLong();
+        this.scheduledExecutorService = new ScheduledThreadPoolExecutor(1);
+
+        this.logger.trace("Scheduling a periodic report of pending events.");
+
+        this.scheduledExecutorService.scheduleAtFixedRate(
+                () -> logger.trace("Total events pending to be flushed: {}", this.totalPending.get()),
+                0,1, TimeUnit.SECONDS
+        );
     }
 
     /**
@@ -137,9 +150,15 @@ public class AsyncBatch extends DefaultBatch {
             logger.trace("[{}] Batch empty, not flushing", name);
             return;
         }
+
         final List<BatchEntry> temp = copyWorkingToTemp();
+
+        final int flushed = temp.size();
+        this.totalPending.addAndGet(flushed);
+
         this.flusher.execute(() -> {
             flush(temp);
+            this.totalPending.addAndGet(-flushed);
         });
     }
 
