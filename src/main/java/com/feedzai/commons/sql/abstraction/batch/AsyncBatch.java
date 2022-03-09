@@ -71,11 +71,20 @@ public class AsyncBatch extends DefaultBatch {
                       final Logger confidentialLogger) {
         super(de, name, batchSize, batchTimeout, maxAwaitTimeShutdown, listener, maxFlushRetries, flushRetryDelay, confidentialLogger);
 
+        int nThreads;
+        try {
+            nThreads = Integer.parseInt(System.getenv("AB_FLUSH_THREADS"));
+            this.logger.info("Running Async Batch with {} threads.", nThreads);
+        } catch (Exception var16) {
+            this.logger.error("Failed to read AB_FLUSH_THREADS from the environment. Falling back to 10 threads.");
+            nThreads = 10;
+        }
+
         // At this point oracle flushes 10_000 rows in 300 secs and max throughput is 2_000trx/sec.
         // In order to flush at the same rate as we receiving transactions we need 10 threads:
         // number of threads = 2_000 * 300 / 6 (scoring servers) / 10_000
         this.flusher = Executors.newFixedThreadPool(
-                10,
+                nThreads,
                 new ThreadFactoryBuilder().setNameFormat("asyncBatch-" + name + "-%d").build()
         );
         this.databaseEngine = ThreadLocal.withInitial(databaseEngineProvider);
@@ -106,7 +115,7 @@ public class AsyncBatch extends DefaultBatch {
         super.flush();
         super.destroy();
 
-        flusher.shutdownNow();
+        this.flusher.shutdownNow();
 
         try {
             if (!flusher.awaitTermination(maxAwaitTimeShutdown, TimeUnit.MILLISECONDS)) {
